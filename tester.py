@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-import cnn_mnist
+import cnn_TBI
 import filereader
 import sys
 

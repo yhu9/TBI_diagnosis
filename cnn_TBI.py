@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-"""Convolutional Neural Network Estimator for MNIST, built with tf.layers."""
+"""Convolutional Neural Network Estimator for TBI, built with tf.layers."""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -27,8 +27,6 @@ from tensorflow.contrib import learn
 from tensorflow.contrib.learn.python.learn.estimators import model_fn as model_fn_lib
 
 tf.logging.set_verbosity(tf.logging.INFO)
-
-#The MNIST dataset comprises 60,000 training examples and 10,000 test examples of the handwritten digits 0-9, formatted as 28x28-pixel monochrome image
 
 ###################################################################
     
@@ -55,7 +53,7 @@ def cnn_model_fn(features,labels,mode,params):
     
     #Input Layer
     #4-d tensor: [batch_size,image_depth,image_width,image_height,channels]
-    #MNIST images are 25x25x25 pixels, 1-channel 
+    #TBI images are 25x25x25 pixels, 1-channel 
     #a -1 batch_size indicates a dynamic allocation based on feature size
     input_layer = tf.reshape(features, [-1,constants.IMAGE_SIZE, constants.IMAGE_SIZE,constants.IMAGE_SIZE,constants.IMAGE_CHANNELS])
 
