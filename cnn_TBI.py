@@ -20,6 +20,7 @@ from __future__ import print_function
 # Imports
 import numpy as np
 import tensorflow as tf
+import math
 import filereader
 import constants
 
@@ -39,207 +40,200 @@ tf.logging.set_verbosity(tf.logging.INFO)
 #5. Fully connected layer
 #6. Logits layer
 ###################################################################
+'''
+#Run Configuration for recording the information
+def create_run_config():
+    config = tf.contrib.learn.RunConfig(
+            save_summary_steps=constants.STEPS_RECORD
+            )
 
-# Flatten Functin for multiple convolution kernels in a single layer
+    return config
+'''
+###################################################################
+
+# Flatten Function for multiple convolution kernels in a single layer
 def flatten_function(tensor_in):
     tensor_in_shape = tensor_in.get_shape()
     tensor_in_flat = tf.reshape(tensor_in,[tensor_in_shape[0].value or -1, np.prod(tensor_in_shape[1:]).value])
     return tensor_in_flat
 
-# Model creation function
-def cnn_model_fn(features,labels,mode,params):
-    #merge all the summaries and write them out to
-    # /tmp/tensorflow/mnist/logs/mnist_with_summaries (by default)
-    
-    #Input Layer
-    #4-d tensor: [batch_size,image_depth,image_width,image_height,channels]
-    #TBI images are 25x25x25 pixels, 1-channel 
-    #a -1 batch_size indicates a dynamic allocation based on feature size
-    input_layer = tf.reshape(features, [-1,constants.IMAGE_SIZE, constants.IMAGE_SIZE,constants.IMAGE_SIZE,constants.IMAGE_CHANNELS])
+#In order to get the next batch of random samples and labels we get some help from this function found online
+#https://stackoverflow.com/questions/40994583/how-to-implement-tensorflows-next-batch-for-own-data
+def next_batch(num, data, labels):
+    '''
+    Return a total of `num` random samples and labels. 
+    '''
+    idx = np.arange(0 , len(data))
+    np.random.shuffle(idx)
+    idx = idx[:num]
+    data_shuffle = [data[ i] for i in idx]
+    labels_shuffle = [labels[ i] for i in idx]
 
-    #Convolutional Layer #1
-    #computes 32 features using 3x3x3 filter with ReLU activation
-    #Padding is added to preserve width and height
-    #Input Tensor Shape: [batch_size,constants.IMAGE_SIZE,constants.IMAGE_SIZE,constants.IMAGE_DEPTH]
-    #Output Tensor Shape: [batch_size,constants.IMAGE_SIZE,constants.IMAGE_SIZE,32]
-    conv1 = tf.layers.conv3d(
-            inputs=input_layer,
-            filters=constants.N_FEAT_LAYER1,
-            kernel_size=[3,3,3],
-            padding="SAME",
-            activation=tf.nn.relu
-            )
+    return np.asarray(data_shuffle), np.asarray(labels_shuffle)
 
-    #Pooling Layer #1
-    #First max pooling layer with a 2x2x2 filter and stride of 2
-    #Input tensor shape: [batch_size,25,25,25,32]
-    #Output tensor shape: [batch_size,12,12,12,32]
-    pool1 = tf.layers.max_pooling3d(
-            inputs=conv1,
-            pool_size=[2,2,2],
-            strides=2)
+#Some monitoring basics on the tensorflow website
+#https://github.com/tensorflow/tensorflow/blob/r1.2/tensorflow/examples/tutorials/mnist/mnist_with_summaries.py
+def variable_summaries(var):
+    """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
 
-    #Convlutional Layer #2
-    #Computes 64 features using a 5x5 filter
-    #Padding is used to preserve width and height
-    #Input tensor Shape: [batch_size, 12,12,12,32]
-    #Output tensor shape: [batch_size,12,12,12,64]
-    conv2 = tf.layers.conv3d(
-            inputs=pool1,
-            filters=constants.N_FEAT_LAYER2,
-            kernel_size=[3,3,3],
-            padding="same",
-            activation=tf.nn.relu)
-    
-    #Pooling Layer #2
-    #second max pooling layer with 2x2 filter and stride of 2
-    #Input tensor shape: [batch_size, 12,12,12,64]
-    #Output tensor shape:[batch_size,6,6,6,64]
-    pool2 = tf.layers.max_pooling3d(
-            inputs=conv2,
-            pool_size=[2,2,2],
-            strides=2)
+    with tf.name_scope('summaries'):
+        mean = tf.reduce_mean(var)
+        tf.summary.scalar('mean', mean)
+        with tf.name_scope('stddev'):
+            stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+        tf.summary.scalar('stddev', stddev)
+        tf.summary.scalar('max', tf.reduce_max(var))
+        tf.summary.scalar('min', tf.reduce_min(var))
+        tf.summary.histogram('histogram', var)
 
-    #Flatten Tensor into a batch of vectors
-    pool2_flat = tf.reshape(pool2,[-1,6*6*6* constants.N_FEAT_LAYER2])
+#Function for creating a convolution layer with the summaries for visualization
+def conv3d(x_in, W_in, strides_in, layer_name):
+    return tf.nn.conv3d(x_in,W_in,strides=strides_in,padding='SAME',name=layer_name)
 
-    #Fully Connected Layer (aka dense layer)
-    #Dense Layer with 1024 neurons
-    #Input Tensor Shape:[batch_size,6*6*6*64]
-    #Output Tensor shape:[batch_size,6*6*6*64]
-    dense = tf.layers.dense(
-            inputs=pool2_flat,
-            units=1024,
-            activation=tf.nn.relu)
+#Function for creating a pooling layer
+def maxpool3d(x_in,ksize_in,strides_in,layer_name):
+    return tf.nn.max_pool3d(x_in,ksize=ksize_in,strides=strides_in,padding='SAME',name=layer_name)
 
-    #Dropout operation; 0.6 probability that element will be kept
-    dropout = tf.layers.dropout(
-            inputs=dense,
-            rate=0.4,
-            training=mode == learn.ModeKeys.TRAIN)
+#Define our Convolutionary Neural Network from scratch
+def CNN(x,y):
+    with tf.name_scope('model'):
+        #The magic number described in this tutorial
+        #https://www.kaggle.com/gzuidhof/full-preprocessing-tutorial
+        #It is calculated as follows:
+        #
+        #           ceil(x/strides1/strides2) * ceil(y/strides1/strides2) * ceil(z/strides1/strides2) * conv2_features
+        #
+        #This number represents the number of features that are to be fed into the first fully connected layer
+        magic_number = int(math.ceil(constants.IMAGE_SIZE / 2 / 2) * math.ceil(constants.IMAGE_SIZE / 2 / 2) * math.ceil(constants.IMAGE_SIZE / 2 / 2) * constants.N_FEAT_LAYER2)
 
-    #Logits Layer
-    #Input Tensor shape: [batch_size,6*6*6*64]
-    #Output Tensor Shape: [batch_size,2]
-    output_layer = tf.layers.dense(inputs=dropout,units=constants.N_CLASSES)
+        #Define our initial weights and biases for each layer
+                                                        #3x3x3 patches, 1 channel, N1 features to compute
+        weights = {'W_conv1':tf.Variable(tf.random_normal([3,3,3,1,constants.N_FEAT_LAYER1])),
+                                                        #3x3x3 patches, N1 channels, N2 features to compute
+                   'W_conv2':tf.Variable(tf.random_normal([3,3,3,constants.N_FEAT_LAYER1,constants.N_FEAT_LAYER2])),
+                   'W_fc':tf.Variable(tf.random_normal([magic_number,constants.N_FEAT_FULL1])),
+                   'out':tf.Variable(tf.random_normal([constants.N_FEAT_FULL1, constants.N_CLASSES]))}
 
-    #Calculate Loss
-    loss = None
-
-    if mode != learn.ModeKeys.INFER:
-        onehot_labels = tf.one_hot(indices=tf.cast(labels,tf.int32), depth=constants.N_CLASSES)
-        loss = tf.losses.softmax_cross_entropy(
-                onehot_labels = onehot_labels,
-                logits=output_layer)
-        tf.summary.scalar('loss',loss)
-
-
-    #Configure the Training Operation
-    train_op = None
-    if mode == learn.ModeKeys.TRAIN:
-        train_op = tf.contrib.layers.optimize_loss(
-                loss = loss,
-                global_step=tf.contrib.framework.get_global_step(),
-                learning_rate=params["learning_rate"],
-                optimizer=params["optimizer"])
-
-    #Generate Predictions
-    predictions = tf.reshape(output_layer,[-1])
-    predictions_dict = {
-            "classes":tf.argmax(input=output_layer, axis=1),
-            "probabilities":tf.nn.softmax(output_layer,name="softmax_tensor")
-            }
-    
-    #Eval Metric
-    eval_metric_ops = {
-            "rmse" : tf.metrics.root_mean_squared_error(
-                    tf.cast(labels,tf.float32),predictions)
-            }
-
-    #Merge all summaries and write them for tensorboard visualization
-    merged = tf.summary.merge_all()
-    train_writer = tf.summary.FileWriter(constants.LOG_DIR)
-    
-    #Write summaries every n steps
-    #for i in range(constants.STEPS):
-    #    summary, _ = sess.run([merged, train_op], feed_dict=feed_dict(True))
-    #    train_writer.add_summary(summary, i)
+        biases = {'b_conv1':tf.Variable(tf.random_normal([constants.N_FEAT_LAYER1])),
+                   'b_conv2':tf.Variable(tf.random_normal([constants.N_FEAT_LAYER2])),
+                   'b_fc':tf.Variable(tf.random_normal([constants.N_FEAT_FULL1])),
+                   'out':tf.Variable(tf.random_normal([constants.N_CLASSES]))}
         
-    train_writer.close()
-    
-    #Return the generated model
-    return model_fn_lib.ModelFnOps(
-            mode=mode,
-            predictions=predictions_dict,
-            loss=loss,
-            train_op=train_op,
-            eval_metric_ops=eval_metric_ops)
+        #create our input layer
+        #(input_tensor, shape=[batch_size, image_depth, image_width, image_height, 1]       #not sure what the 1 is at the end
+        x = tf.reshape(x, shape=[-1,constants.IMAGE_SIZE,constants.IMAGE_SIZE,constants.IMAGE_SIZE,1],name="input_layer")
+        
+        #create our 1st convolutionary layer with histogram summaries of activations
+        with tf.variable_scope('Convolution_1'):
+            conv1 = conv3d(x_in=x,W_in=weights['W_conv1'],strides_in=[1,1,1,1,1],layer_name='conv_1')
+            activations1 = tf.nn.relu(conv1 + biases['b_conv1'])
+            variable_summaries(weights['W_conv1'])
+            tf.summary.histogram('activations_1',activations1)
+            print(conv1.name)
+
+        #create our 1st pooling layer
+        with tf.variable_scope('Pool_1'):
+            pool1 = maxpool3d(x_in=activations1,ksize_in=[1,2,2,2,1],strides_in=[1,2,2,2,1],layer_name='pool1')
+
+        #create our 2nd convolutionary layer with histogram summaries of activations
+        with tf.variable_scope('Convolution_2'):
+            conv2 = conv3d(x_in=pool1,W_in=weights['W_conv2'],strides_in=[1,1,1,1,1],layer_name='conv_2')
+            activations2 = tf.nn.relu(conv2 + biases['b_conv2'])
+            variable_summaries(weights['W_conv2'])
+            tf.summary.histogram('activations_2',activations2)
+
+        #create our 2nd pooling layer
+        with tf.variable_scope('Pool_2'):
+            pool2 = maxpool3d(x_in=activations2,ksize_in=[1,2,2,2,1],strides_in=[1,2,2,2,1],layer_name='pool2')
+
+        #create our first fully connected layer
+        with tf.variable_scope('Fully_Connected_1'):
+            fullyConnected = tf.reshape(pool2,[-1,magic_number])
+            activations3 = tf.nn.relu(tf.matmul(fullyConnected,weights['W_fc']) + biases['b_fc'])
+            tf.summary.histogram('activations_3',activations3)
+
+        #create our dropout layer
+        with tf.variable_scope('Dropout'):
+            dropout = tf.nn.dropout(activations3,constants.KEEP_RATE)
+
+        #Final fully connected layer for classification
+        with tf.variable_scope('Fully_Connected_2'):
+            output = tf.matmul(dropout,weights['out'])+biases['out']
+
+    #Record accuracy
+    #onehot_labels = tf.one_hot(indices=tf.cast(y,tf.int64), depth=constants.N_CLASSES)
+    #correct_prediction = tf.equal(tf.argmax(output, 1), tf.argmax(onehot_labels, 1))
+    #accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+    #tf.summary.scalar('accuracy',accuracy)
+
+    return output
+
+#Training function for our neural network
+def train_neural_network(x,y,t_data,t_labels,v_data,v_labels):
+
+    #Make predictions and calculate loss and accuracy given the inputs and labels
+    predictions = CNN(x,y)
+    onehot_labels = tf.one_hot(indices=tf.cast(y,tf.int64), depth=constants.N_CLASSES)
+    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=predictions,labels=onehot_labels))
+    optimizer = tf.train.GradientDescentOptimizer(constants.LEARNING_RATE).minimize(cost)
+    correct_prediction = tf.equal(tf.argmax(predictions,1),tf.argmax(onehot_labels,1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction,tf.float32))
+    tf.summary.scalar('accuracy',accuracy)
+
+    #Dictionary for feeding in batches of data
+    def feed_dict(train):
+        """Make a TensorFlow feed_dict: maps data onto Tensor placeholders."""
+        if train:
+            xs, ys = next_batch(constants.BATCH_SIZE,t_data,t_labels)
+        else:
+            xs, ys = v_data, v_labels
+        return {x: xs, y: ys}
+
+    #Run the session/CNN and either train or record accuracies at given steps
+    with tf.Session() as sess:
+        sess.run(tf.initialize_all_variables())
+        merged = tf.summary.merge_all()
+        train_writer = tf.summary.FileWriter(constants.LOG_DIR + '/train',sess.graph)
+        test_writer = tf.summary.FileWriter(constants.LOG_DIR + '/test')
+
+        successful_runs = 0
+        total_runs = 0
+
+        for i in range(constants.STEPS):
+            if i % constants.STEPS_RECORD == 0:
+                summary, loss, acc = sess.run([merged,cost,accuracy],feed_dict=feed_dict(False))
+                test_writer.add_summary(summary,i)
+                print('step: ' + str(i) + '     ' +
+                        'loss: ' + str(loss) + '     ' +
+                        'accuracy: ' + str(acc))
+            else:
+                summary,_ = sess.run([merged,optimizer],feed_dict=feed_dict(True))
+                train_writer.add_summary(summary,i)
+
+
+        train_writer.close()
 
 #######################################################################################
-#Read input
-def read_input():
-
-    class INPUT(object):
-        pass
-
-    IN_DATA = INPUT()
-
-    # Load training and eval data
-
-
-    mnist = learn.datasets.load_dataset("mnist")
-    IN_DATA.train_data = mnist.train.images
-    IN_DATA.train_labels = np.asarray(mnist.train.labels,dtype=np.int32) #Returns np.array
-    IN_DATA.eval_data = mnist.test.images
-    IN_DATA.eval_labels = np.asarray(mnist.test.labels,dtype=np.int32) #Returns np arra
-    IN_DATA.validation = mnist.validation
-    
-    return IN_DATA
-
 #######################################################################################
 #Main Function
 
 def main(unused_argv):
-    #train/eval data are represented as 2-d numpy array
-    #train/eval labels are represented as a 1-d numpy array
-    #First lets read in all of the data all located in the directory
-    input_data = filereader.readFiles(constants.DIRECTORY)
-
-    #set model params
-    model_params = {"learning_rate": constants.LEARNING_RATE, "optimizer":constants.OPTIMIZER}
-
-    #create the estimator
-    mnist_classifier = tf.contrib.learn.Estimator(model_fn=cnn_model_fn, model_dir=constants.LOG_DIR,params=model_params)
-    
-    #Train the model
-    mnist_classifier.fit(
-            x=input_data.train_data,
-            y=input_data.train_labels,
-            batch_size=constants.BATCH_SIZE,
-            steps=constants.STEPS
-            #monitors=[learn.monitors.ValidationMonitor(input_data.validation.images,input_data.validation.labels)]
-            )
-
-    #Configure the accuracy metric for evaluation
-    validation_metrics = {
-        "accuracy":
-            tf.learn.MetricSpec(
-                metric_fn=tf.metrics.streaming_accuracy,
-                prediction_key=tf.learn.PredictionKey.CLASSES),
-        "precision":
-            tf.learn.MetricSpec(
-                metric_fn=tf.metrics.streaming_precision,
-                prediction_key=tf.learn.PredictionKey.CLASSES),
-        "recall":
-            tf.learn.MetricSpec(
-                metric_fn=tf.metrics.streaming_recall,
-                prediction_key=tf.learn.PredictionKey.CLASSES)
-    }
-
-    #Evaluate the model and get the results printed out
-    eval_results = mnist_classifier.evaluate(
-            x=eval_data, y=eval_labels, metrics=validation_metrics)
-    print(eval_results)
+  
+    graph = tf.Graph()
+    with graph.as_default():
+        #train/eval data are represented as 2-d numpy array
+        #train/eval labels are represented as a 1-d numpy array
+        #First lets read in all of the data all located in the directory
+        #input_data = filereader.readFiles(constants.DIRECTORY)
+        input_data = filereader.dummyRecord()
+        x = tf.placeholder('float')
+        y = tf.placeholder('float')
+        
+        train_neural_network(x,y,
+                input_data.train_data,
+                input_data.train_labels,
+                input_data.eval_data,
+                input_data.eval_labels)
 
 if __name__ == "__main__":
     tf.app.run()

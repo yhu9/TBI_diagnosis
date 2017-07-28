@@ -77,7 +77,7 @@ def readRecord(filename,flag):
                 z = np.array(np.arange(k*mult_val,(k+1) * mult_val - 1),np.intp)
                 val = np.sum(CONTAINER[np.ix_(x,y,z)])
                 record[i][j][k] = val
-    
+ 
     #Optional showing of the image before it is blurred
     if(flag == "show"):
         x,y,z = np.where(record >= 0)
@@ -116,7 +116,7 @@ def readFiles(directory):
 
     #Create containers for the data as numpy arrays
     train_images = np.zeros((constants.N,constants.OUTPUT_SIZE * constants.OUTPUT_SIZE * constants.OUTPUT_SIZE),dtype=np.float32)
-    train_labels = np.zeros(constants.N,dtype=np.float32)
+    train_labels = np.zeros(constants.N,dtype=np.int64)
     eval_images = train_images
     eval_labels = train_labels
 
@@ -141,4 +141,30 @@ def readFiles(directory):
 def showRecord(filepath):
     readRecord(filepath,"show")
 
+#A dummy record for testing purposes
+def dummyRecord():
+
+    class INPUT(object):
+        pass
+
+    dummy_data_container = np.ones((constants.N,constants.OUTPUT_SIZE * constants.OUTPUT_SIZE * constants.OUTPUT_SIZE),dtype=np.int32)
+    dummy_label_container = np.ones(constants.N,dtype=np.int64)
+
+    dummy_data = np.ones((constants.OUTPUT_SIZE * constants.OUTPUT_SIZE * constants.OUTPUT_SIZE),dtype=np.int32)
+    dummy_label = 0
+    
+    dummy_data_container[0] = dummy_data
+    dummy_label_container[0] = dummy_label
+
+    IN_DATA = INPUT()
+    IN_DATA.train_data = dummy_data_container
+    IN_DATA.train_labels = dummy_label_container
+    IN_DATA.eval_data = dummy_data_container
+    IN_DATA.eval_labels = dummy_label_container
+
+    print("Done")
+
+
+
+    return IN_DATA
 
