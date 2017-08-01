@@ -40,16 +40,6 @@ tf.logging.set_verbosity(tf.logging.INFO)
 #5. Fully connected layer
 #6. Logits layer
 ###################################################################
-'''
-#Run Configuration for recording the information
-def create_run_config():
-    config = tf.contrib.learn.RunConfig(
-            save_summary_steps=constants.STEPS_RECORD
-            )
-
-    return config
-'''
-###################################################################
 
 # Flatten Function for multiple convolution kernels in a single layer
 def flatten_function(tensor_in):
@@ -87,15 +77,27 @@ def variable_summaries(var):
         tf.summary.histogram('histogram', var)
 
 #Function for creating a convolution layer with the summaries for visualization
-def conv3d(x_in, W_in, strides_in, layer_name):
-    return tf.nn.conv3d(x_in,W_in,strides=strides_in,padding='SAME',name=layer_name)
+def conv3d(x_in, W_in,biases_in, strides_in, layer_name,act=tf.nn.relu):
+    with tf.name_scope(layer_name):
+        conv = tf.nn.conv3d(x_in,W_in,strides=strides_in,padding='SAME',name=layer_name)
+        with tf.name_scope('weights'):
+            weights = W_in
+            variable_summaries(weights)
+        with tf.name_scope('biases'):
+            biases = biases_in
+            variable_summaries(biases)
+        activations = act(conv + biases)
+        tf.summary.histogram('activations', activations)
+        return activations
 
 #Function for creating a pooling layer
 def maxpool3d(x_in,ksize_in,strides_in,layer_name):
-    return tf.nn.max_pool3d(x_in,ksize=ksize_in,strides=strides_in,padding='SAME',name=layer_name)
+    pool = tf.nn.max_pool3d(x_in,ksize=ksize_in,strides=strides_in,padding='SAME',name=layer_name)
+    return pool
 
 #Define our Convolutionary Neural Network from scratch
 def CNN(x,y):
+
     with tf.name_scope('model'):
         #The magic number described in this tutorial
         #https://www.kaggle.com/gzuidhof/full-preprocessing-tutorial
@@ -121,52 +123,38 @@ def CNN(x,y):
         
         #create our input layer
         #(input_tensor, shape=[batch_size, image_depth, image_width, image_height, 1]       #not sure what the 1 is at the end
-        x = tf.reshape(x, shape=[-1,constants.IMAGE_SIZE,constants.IMAGE_SIZE,constants.IMAGE_SIZE,1],name="input_layer")
+        with tf.name_scope('input'):
+            x = tf.reshape(x, shape=[-1,constants.IMAGE_SIZE,constants.IMAGE_SIZE,constants.IMAGE_SIZE,1],name="input_layer")
         
         #create our 1st convolutionary layer with histogram summaries of activations
-        with tf.variable_scope('Convolution_1'):
-            conv1 = conv3d(x_in=x,W_in=weights['W_conv1'],strides_in=[1,1,1,1,1],layer_name='conv_1')
-            activations1 = tf.nn.relu(conv1 + biases['b_conv1'])
-            variable_summaries(weights['W_conv1'])
-            tf.summary.histogram('activations_1',activations1)
-            print(conv1.name)
+        conv1 = conv3d(x_in=x,W_in=weights['W_conv1'],biases_in=biases['b_conv1'],strides_in=[1,1,1,1,1],layer_name='Convolution_Layer1')
 
         #create our 1st pooling layer
-        with tf.variable_scope('Pool_1'):
-            pool1 = maxpool3d(x_in=activations1,ksize_in=[1,2,2,2,1],strides_in=[1,2,2,2,1],layer_name='pool1')
+        conv1 = maxpool3d(x_in=conv1,ksize_in=[1,2,2,2,1],strides_in=[1,2,2,2,1],layer_name='Pooling_Layer1')
 
         #create our 2nd convolutionary layer with histogram summaries of activations
-        with tf.variable_scope('Convolution_2'):
-            conv2 = conv3d(x_in=pool1,W_in=weights['W_conv2'],strides_in=[1,1,1,1,1],layer_name='conv_2')
-            activations2 = tf.nn.relu(conv2 + biases['b_conv2'])
-            variable_summaries(weights['W_conv2'])
-            tf.summary.histogram('activations_2',activations2)
+        conv2 = conv3d(x_in=conv1,W_in=weights['W_conv2'],biases_in=biases['b_conv2'],strides_in=[1,1,1,1,1],layer_name='Convolution_Layer2')
 
         #create our 2nd pooling layer
-        with tf.variable_scope('Pool_2'):
-            pool2 = maxpool3d(x_in=activations2,ksize_in=[1,2,2,2,1],strides_in=[1,2,2,2,1],layer_name='pool2')
+        conv2 = maxpool3d(x_in=conv2,ksize_in=[1,2,2,2,1],strides_in=[1,2,2,2,1],layer_name='Pooling_Layer2')
 
         #create our first fully connected layer
-        with tf.variable_scope('Fully_Connected_1'):
-            fullyConnected = tf.reshape(pool2,[-1,magic_number])
-            activations3 = tf.nn.relu(tf.matmul(fullyConnected,weights['W_fc']) + biases['b_fc'])
-            tf.summary.histogram('activations_3',activations3)
+        with tf.name_scope('Fully_Connected_1'):
+            with tf.name_scope('reshape'):
+                fullyConnected = tf.reshape(conv2,[-1,magic_number])
+            with tf.name_scope('activation'):
+                fullyConnected = tf.nn.relu(tf.matmul(fullyConnected,weights['W_fc']) + biases['b_fc'])
+            tf.summary.histogram('activations_3',fullyConnected)
 
         #create our dropout layer
-        with tf.variable_scope('Dropout'):
-            dropout = tf.nn.dropout(activations3,constants.KEEP_RATE)
+        with tf.name_scope('dropout_layer'):
+            fullyConnected = tf.nn.dropout(fullyConnected,constants.KEEP_RATE)
 
         #Final fully connected layer for classification
-        with tf.variable_scope('Fully_Connected_2'):
-            output = tf.matmul(dropout,weights['out'])+biases['out']
+        with tf.name_scope('output'):
+            output = tf.matmul(fullyConnected,weights['out'])+biases['out']
 
-    #Record accuracy
-    #onehot_labels = tf.one_hot(indices=tf.cast(y,tf.int64), depth=constants.N_CLASSES)
-    #correct_prediction = tf.equal(tf.argmax(output, 1), tf.argmax(onehot_labels, 1))
-    #accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-    #tf.summary.scalar('accuracy',accuracy)
-
-    return output
+        return output
 
 #Training function for our neural network
 def train_neural_network(x,y,t_data,t_labels,v_data,v_labels):
@@ -190,28 +178,31 @@ def train_neural_network(x,y,t_data,t_labels,v_data,v_labels):
         return {x: xs, y: ys}
 
     #Run the session/CNN and either train or record accuracies at given steps
-    with tf.Session() as sess:
-        sess.run(tf.initialize_all_variables())
-        merged = tf.summary.merge_all()
-        train_writer = tf.summary.FileWriter(constants.LOG_DIR + '/train',sess.graph)
-        test_writer = tf.summary.FileWriter(constants.LOG_DIR + '/test')
+    sess = tf.InteractiveSession()
+    sess.run(tf.global_variables_initializer())
+    merged = tf.summary.merge_all()
+    train_writer = tf.summary.FileWriter(constants.LOG_DIR + '/train',sess.graph)
+    test_writer = tf.summary.FileWriter(constants.LOG_DIR + '/test')
 
-        successful_runs = 0
-        total_runs = 0
+    successful_runs = 0
+    total_runs = 0
 
-        for i in range(constants.STEPS):
-            if i % constants.STEPS_RECORD == 0:
-                summary, loss, acc = sess.run([merged,cost,accuracy],feed_dict=feed_dict(False))
-                test_writer.add_summary(summary,i)
-                print('step: ' + str(i) + '     ' +
-                        'loss: ' + str(loss) + '     ' +
-                        'accuracy: ' + str(acc))
-            else:
-                summary,_ = sess.run([merged,optimizer],feed_dict=feed_dict(True))
-                train_writer.add_summary(summary,i)
+    for i in range(constants.STEPS):
+        if i % constants.STEPS_RECORD == 0:
+            summary, loss, acc = sess.run([merged,cost,accuracy],feed_dict=feed_dict(False))
+            test_writer.add_summary(summary,i)
+            print('step: ' + str(i) + '     ' +
+                    'loss: ' + str(loss) + '     ' +
+                    'accuracy: ' + str(acc))
+            #w_conv1 = tf.get_variable('W_conv1',shape=[3,3,3,1,32])
+            #weights = w_conv1.eval()
+            #print(weights)
+        else:
+            summary,_ = sess.run([merged,optimizer],feed_dict=feed_dict(True))
+            train_writer.add_summary(summary,i)
 
 
-        train_writer.close()
+    train_writer.close()
 
 #######################################################################################
 #######################################################################################
